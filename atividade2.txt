@@ -1,0 +1,25 @@
+1-Inserindo o dados na tabela produtos
+LOAD DATA INFILE 'C:/Users/Luanm/Downloads/produtos.csv'
+INTO TABLE lm_produtos FIELDS TERMINATED BY ','  OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n' (SKU, UPC, nomeProduto, valor);
+
+2-Criando as tabelas entrega e compra
+CREATE TABLE lm_entrega (
+    codigoComprador VARCHAR(255),
+    nomeComprador VARCHAR(100),
+    endereco VARCHAR(200),
+    cep VARCHAR(20),
+    uf VARCHAR(2),
+    pais VARCHAR(50),
+    idPedido VARCHAR(255),
+    totalPedido DECIMAL(9,2),
+    email VARCHAR(100),
+    PRIMARY KEY (idPedido),
+    FOREIGN KEY (idPedido) REFERENCES lm_pedido(codigoPedido)
+);
+
+CREATE TABLE lm_compra (
+    quantidadeNecessaria INT,
+    nomeProduto VARCHAR(100),
+    sku VARCHAR(15),
+    PRIMARY KEY (sku)
+);
