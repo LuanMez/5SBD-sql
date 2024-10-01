@@ -61,8 +61,8 @@ CREATE TABLE lm_pedido (
     idPedido INT AUTO_INCREMENT PRIMARY KEY,
     codigoPedido VARCHAR(6) UNIQUE,
     dataPedido DATE,
-    idCliente INT,
-    frete DECIMAL(10, 2),
+    status ENUM('aguardando', 'concluído', 'cancelado', 'processando'),
+    codigoComprador VARCHAR(255)
     FOREIGN KEY (idCliente) REFERENCES lm_cliente(idCliente)
 );
 
