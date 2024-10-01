@@ -1,0 +1,113 @@
+FAETERJ-Rio
+5SBD - Scripts de Banco de Dados e SQL - 2024.2
+Professor: André Neves
+Aluno: Luan Moreira de Menezes
+
+1-Criação da tabela temporária
+CREATE TABLE LUANTEMPDATA (
+    codigoPedido VARCHAR(6),
+    dataPedido DATE,
+    SKU VARCHAR(15),
+    UPC VARCHAR(3),
+    nomeProduto VARCHAR(50),
+    qtd INT,
+    valor DECIMAL(10, 2),
+    frete DECIMAL(10, 2),
+    email VARCHAR(50),
+    codigoComprador VARCHAR(3),
+    nomeComprador VARCHAR(50),
+    endereco VARCHAR(100),
+    CEP VARCHAR(8),
+    UF VARCHAR(2),
+    pais VARCHAR(30)
+);
+
+2-Inserindo os dados na tabela
+LOAD DATA INFILE 'C:/Users/Luanm/Downloads/pedidos.txt'
+INTO TABLE LUANTEMPDATA
+FIELDS TERMINATED BY ';' ENCLOSED BY '"' 
+LINES TERMINATED BY '\n'
+IGNORE 1 LINES
+(codigoPedido, dataPedido, SKU, UPC, nomeProduto, qtd, valor, frete, email, codigoComprador, nomeComprador, endereco, CEP, UF, pais);
+SELECT * FROM `luantempdata` WHERE 1
+
+3-Criando todas as tabelas
+CREATE TABLE lm_cliente (
+    endereco VARCHAR(100),
+    CEP VARCHAR(8),
+    UF VARCHAR(2),
+    pais VARCHAR(30),
+    idCliente INT AUTO_INCREMENT PRIMARY KEY,
+    codigoComprador VARCHAR(3) UNIQUE,
+    nomeComprador VARCHAR(50),
+    email VARCHAR(50)
+);
+
+CREATE TABLE lm_produtos (
+    nomeProduto VARCHAR(50),
+    valor DECIMAL(10, 2),
+    idProduto INT AUTO_INCREMENT PRIMARY KEY,
+    SKU VARCHAR(15) UNIQUE,
+    UPC VARCHAR(3)
+);
+
+CREATE TABLE lm_estoque (
+    idEstoque INT AUTO_INCREMENT PRIMARY KEY,
+    SKU VARCHAR(15) UNIQUE,
+    quantidade INT
+);
+
+CREATE TABLE lm_pedido (
+    idPedido INT AUTO_INCREMENT PRIMARY KEY,
+    codigoPedido VARCHAR(6) UNIQUE,
+    dataPedido DATE,
+    idCliente INT,
+    frete DECIMAL(10, 2),
+    FOREIGN KEY (idCliente) REFERENCES lm_cliente(idCliente)
+);
+
+CREATE TABLE lm_itempedido (
+    idProduto INT,
+    quantidade INT,
+    idItemPedido INT AUTO_INCREMENT PRIMARY KEY,
+    idPedido INT,
+    valor DECIMAL(10, 2),
+    FOREIGN KEY (idPedido) REFERENCES lm_pedido(idPedido),
+    FOREIGN KEY (idProduto) REFERENCES lm_produtos(idProduto)
+);
+
+
+4- Inserir informações nas tabelas utilizando os dados da tabela temporária LUANTEMPDATA.
+INSERT INTO lm_cliente (codigoComprador, nomeComprador, email, endereco, CEP, UF, pais)
+SELECT DISTINCT codigoComprador, nomeComprador, email, endereco, CEP, UF, pais
+FROM LUANTEMPDATA
+ON DUPLICATE KEY UPDATE
+nomeComprador = VALUES(nomeComprador), email = VALUES(email), endereco = VALUES(endereco), CEP = VALUES(CEP), UF = VALUES(UF), pais = VALUES(pais);
+
+INSERT INTO lm_produtos (SKU, UPC, nomeProduto, valor)
+SELECT DISTINCT SKU, UPC, nomeProduto, valor
+FROM LUANTEMPDATA
+ON DUPLICATE KEY UPDATE
+nomeProduto = VALUES(nomeProduto), valor = VALUES(valor);
+
+INSERT INTO lm_estoque (SKU, quantidade)
+SELECT SKU, SUM(qtd) AS quantidade
+FROM LUANTEMPDATA
+GROUP BY SKU
+ON DUPLICATE KEY UPDATE
+quantidade = quantidade + VALUES(quantidade);
+
+INSERT INTO lm_pedido (codigoPedido, dataPedido, idCliente, frete)
+SELECT DISTINCT codigoPedido, dataPedido, lm_cliente.idCliente, frete
+FROM LUANTEMPDATA
+JOIN lm_cliente ON LUANTEMPDATA.codigoComprador = lm_cliente.codigoComprador
+ON DUPLICATE KEY UPDATE
+dataPedido = VALUES(dataPedido), frete = VALUES(frete);
+
+INSERT INTO lm_itempedido (idPedido, idProduto, quantidade, valor)
+SELECT lm_pedido.idPedido, lm_produtos.idProduto, LUANTEMPDATA.qtd, LUANTEMPDATA.valor
+FROM LUANTEMPDATA
+JOIN lm_pedido ON LUANTEMPDATA.codigoPedido = lm_pedido.codigoPedido
+JOIN lm_produtos ON LUANTEMPDATA.SKU = lm_produtos.SKU;
+
+DROP TABLE LUANTEMPDATA;
