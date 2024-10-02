@@ -1,122 +1,111 @@
+--GerenciarPedidos
 DELIMITER //
 
-CREATE PROCEDURE processarPedidos()
+CREATE PROCEDURE GerenciarPedidos()
 BEGIN
-    DECLARE idPedido VARCHAR(255);
-    DECLARE qtd INT;
-    DECLARE sku VARCHAR(50);
-    DECLARE upc VARCHAR(50);
-    DECLARE nomeProduto VARCHAR(50);
-    DECLARE valor DECIMAL(9,2);
-    DECLARE frete DECIMAL(9,2);
-    DECLARE email VARCHAR(100);
-    DECLARE codigoComprador VARCHAR(255);
-    DECLARE nomeComprador VARCHAR(100);
-    DECLARE endereco VARCHAR(200);
-    DECLARE cep VARCHAR(20);
-    DECLARE uf VARCHAR(2);
-    DECLARE pais VARCHAR(50);
-    DECLARE totalPedido DECIMAL(9,2);
-    DECLARE estoqueAtual INT;
-    DECLARE totalEntrega DECIMAL(9,2);
-    
-    -- Variável de controle do cursor
     DECLARE done INT DEFAULT FALSE;
+    DECLARE v_codigoPedido VARCHAR(255);
+    DECLARE v_SKU VARCHAR(255);
+    DECLARE v_quantidade INT;
+    DECLARE v_valor DECIMAL(10, 2);
+    DECLARE v_frete DECIMAL(10, 2);
+    DECLARE v_estoque INT;
 
-    -- Declaração do cursor
-    DECLARE pedidoCursor CURSOR FOR
-        SELECT p.codigoPedido, pi.SKU, pi.UPC, pi.nomeProduto, pi.quantidade, pi.valor, p.frete, 
-               p.email, p.codigoComprador, p.nomeComprador, p.endereco, p.CEP, p.UF, p.pais
-        FROM lm_pedido p 
-        INNER JOIN lm_itemPedido pi ON pi.codigoPedido = p.codigoPedido  
-        WHERE p.status = 'aguardando'
-        ORDER BY pi.valor * pi.quantidade DESC;
-
-    -- Handler para finalizar o cursor
+    -- Declare the cursor
+    DECLARE pedido_cursor CURSOR FOR 
+        SELECT codigoPedido, SKU, quantidade, valor, frete 
+        FROM lm_tempdata;
+    
+    -- Declare a continue handler for when there are no more rows
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
 
-    -- Abrir o cursor
-    OPEN pedidoCursor;
+    -- Open the cursor
+    OPEN pedido_cursor;
 
+    -- Start looping through the cursor
     read_loop: LOOP
-        -- Busca o próximo registro do cursor
-        FETCH pedidoCursor INTO idPedido, sku, upc, nomeProduto, qtd, valor, frete, 
-                                email, codigoComprador, nomeComprador, endereco, cep, uf, pais;
+        FETCH pedido_cursor INTO v_codigoPedido, v_SKU, v_quantidade, v_valor, v_frete;
         
-        -- Se não houver mais registros, sair do loop
         IF done THEN
             LEAVE read_loop;
         END IF;
 
-        -- Calcula o valor total do pedido
-        SET totalPedido = qtd * valor + frete;
+        -- Verificar estoque
+        SELECT quantidade INTO v_estoque 
+        FROM lm_estoque 
+        WHERE SKU = v_SKU;
 
-        -- Atualiza a tabela de entrega
-        INSERT INTO lm_entrega (idPedido, totalPedido, email, codigoComprador, nomeComprador, endereco, cep, uf, pais)
-        VALUES (idPedido, totalPedido, email, codigoComprador, nomeComprador, endereco, cep, uf, pais);
+        IF v_estoque >= v_quantidade THEN
+            -- Atualiza status do pedido para 'aprovado'
+            UPDATE lm_pedidos
+            SET status = 'aprovado'
+            WHERE codigoPedido = v_codigoPedido;
 
-        -- Verifica o estoque atual
-        SELECT quantidade INTO estoqueAtual FROM lm_estoque WHERE SKU = sku;
-
-        -- Processa a entrega ou faz a compra
-        IF estoqueAtual >= qtd THEN
             -- Atualiza o estoque
             UPDATE lm_estoque
-            SET quantidade = quantidade - qtd
-            WHERE SKU = sku;
-
-            SET totalEntrega = qtd * valor;
-
-            -- Atualiza o status do pedido
-            UPDATE lm_pedido 
-            SET status = 'concluído' 
-            WHERE codigoPedido = idPedido;
-
-            -- Registro da entrega
-            SELECT CONCAT('Pedido concluído: ', idPedido, ', Produto: ', nomeProduto, ', Quantidade: ', qtd);
+            SET quantidade = quantidade - v_quantidade
+            WHERE SKU = v_SKU;
         ELSE
-            -- Se não houver estoque suficiente, processa compra
-            INSERT INTO lm_compra (sku, nomeProduto, quantidadeNecessaria)
-            VALUES (sku, nomeProduto, qtd - estoqueAtual);
+            -- Atualiza status do pedido para 'pendente'
+            UPDATE lm_pedidos
+            SET status = 'pendente'
+            WHERE codigoPedido = v_codigoPedido;
 
-            -- Atualiza o estoque para zero
-            UPDATE lm_estoque
-            SET quantidade = 0
-            WHERE SKU = sku;
-
-            -- Entrega parcial se houver algum estoque
-            IF estoqueAtual > 0 THEN
-                SET totalEntrega = estoqueAtual * valor;
-                SELECT CONCAT('Entrega parcial: Pedido ', idPedido, ', Produto: ', nomeProduto, ', Quantidade concluído: ', estoqueAtual);
-                
-                -- Atualiza o status do pedido para 'processando'
-                UPDATE lm_pedido 
-                SET status = 'processando' 
-                WHERE codigoPedido = idPedido;
-            END IF;
-
-            SELECT CONCAT('Produto em falta: ', nomeProduto, ' será comprado. Quantidade necessária: ', qtd - estoqueAtual);
+            -- Verifica se é necessário adicionar à tabela de compras
+            INSERT INTO lm_compra (SKU, quantidade) 
+            VALUES (v_SKU, v_quantidade)
+            ON DUPLICATE KEY UPDATE quantidade = quantidade + v_quantidade;
         END IF;
 
-        -- Verifica se o estoque já está disponível para pedidos pendentes
-        IF (SELECT COUNT(*) FROM lm_compra WHERE sku = sku AND status = 'pendente') > 0 THEN
-            -- Atualiza o estoque e o status de compra se possível
-            IF estoqueAtual + (SELECT quantidadeNecessaria FROM lm_compra WHERE sku = sku AND status = 'pendente') >= qtd THEN
-                UPDATE lm_estoque
-                SET quantidade = quantidade + (SELECT quantidadeNecessaria FROM lm_compra WHERE sku = sku AND status = 'pendente')
-                WHERE SKU = sku;
+    END LOOP;
 
-                -- Atualiza o status da compra para 'concluído'
-                UPDATE lm_compra
-                SET status = 'concluído'
-                WHERE sku = sku AND status = 'pendente';
-            END IF;
+--ReabastecerEstoque
+DELIMITER //
+
+CREATE PROCEDURE ReabastecerEstoque()
+BEGIN
+    DECLARE done INT DEFAULT FALSE;
+    DECLARE v_SKU VARCHAR(255);
+    DECLARE v_quantidade INT;
+
+    -- Declare the cursor
+    DECLARE estoque_cursor CURSOR FOR 
+        SELECT SKU, SUM(quantidade) AS total_quantidade
+        FROM wl_tempdata
+        GROUP BY SKU;
+
+    -- Declare a continue handler for when there are no more rows
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+    -- Open the cursor
+    OPEN estoque_cursor;
+
+    -- Start looping through the cursor
+    read_loop: LOOP
+        FETCH estoque_cursor INTO v_SKU, v_quantidade;
+        
+        IF done THEN
+            LEAVE read_loop;
+        END IF;
+
+        -- Verifica se o estoque está zerado
+        IF (SELECT quantidade FROM wl_estoque WHERE SKU = v_SKU) = 0 THEN
+            -- Atualiza o estoque com a nova quantidade
+            INSERT INTO wl_estoque (SKU, quantidade) 
+            VALUES (v_SKU, v_quantidade)
+            ON DUPLICATE KEY UPDATE quantidade = quantidade + v_quantidade;
         END IF;
 
     END LOOP;
 
     -- Fechar o cursor
-    CLOSE pedidoCursor;
+    CLOSE estoque_cursor;
+END //
+
+DELIMITER ;
+
+    -- Fechar o cursor
+    CLOSE pedido_cursor;
 END //
 
 DELIMITER ;
