@@ -1,6 +1,6 @@
 Processar estoque dos pedidos
 DELIMITER // 
-CREATE PROCEDURE lmz_processar_estoque()
+CREATE PROCEDURE lmz_processar_estoque_atual()
 BEGIN
 
     -- Declaração de variáveis para armazenar os valores do cursor
@@ -63,7 +63,7 @@ BEGIN
     DECLARE pronto INT DEFAULT 0;      
 
     -- Verifica se há código duplicado para o pedido e define flag
-    DECLARE codigoDuplicado INT DEFAULT 0;
+    DECLARE Duplicado INT DEFAULT 0;
 
     -- Declaração de cursores para selecionar pedidos e itens dos pedidos
     DECLARE cursor_pedidos CURSOR FOR 
