@@ -1,6 +1,6 @@
 Processar estoque dos pedidos
 DELIMITER // 
-CREATE PROCEDURE lmz_processar_estoque_atual()
+CREATE PROCEDURE lmz_processar_estoque()
 BEGIN
 
     -- Declaração de variáveis para armazenar os valores do cursor
