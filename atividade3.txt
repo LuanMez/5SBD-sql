@@ -212,6 +212,8 @@ BEGIN
 
     END LOOP;
 
+    DECLARE cursor_pedidos CURSOR FOR SELECT codigoPedido, status  FROM wl_pedidos  ORDER BY valor DESC;
+
     -- Fechar o cursor de pedidos após o processamento
     CLOSE cursor_pedidos;
 
