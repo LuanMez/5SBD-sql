@@ -1,221 +1,111 @@
-Processar estoque dos pedidos
-DELIMITER // 
-CREATE PROCEDURE lmz_processar_estoque()
+--GerenciarPedidos
+DELIMITER //
+
+CREATE PROCEDURE GerenciarPedidos()
 BEGIN
+    DECLARE done INT DEFAULT FALSE;
+    DECLARE v_codigoPedido VARCHAR(255);
+    DECLARE v_SKU VARCHAR(255);
+    DECLARE v_quantidade INT;
+    DECLARE v_valor DECIMAL(10, 2);
+    DECLARE v_frete DECIMAL(10, 2);
+    DECLARE v_estoque INT;
 
-    -- Declaração de variáveis para armazenar os valores do cursor
-    DECLARE v_SKU VARCHAR(20);         
-    DECLARE v_quantidade INT;       
-    DECLARE pronto INT DEFAULT 0;      
+    -- Declarando o cursor
+    DECLARE pedido_cursor CURSOR FOR 
+        SELECT codigoPedido, SKU, quantidade, valor, frete 
+        FROM lm_tempdata;
+    
+    -- O que acontece quando o cursor chega no fim
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
 
-    -- Declaração do cursor para selecionar os valores da tabela temporária de estoque
-    DECLARE cursor_estoque CURSOR FOR 
-        SELECT SKU, quantidade FROM lmz_tempdata_estoque;
+    -- abri o cursor
+    OPEN pedido_cursor;
 
-    -- Tratamento de exceção: define o valor de 'pronto' como 1 quando não houver mais registros para buscar no cursor
-    DECLARE CONTINUE HANDLER FOR NOT FOUND SET pronto = 1;
-
-    -- Abrindo o cursor para iniciar a leitura dos dados
-    OPEN cursor_estoque;
-
-    -- Loop para processar os dados do cursor até que todos os registros sejam processados
+    -- Começou o loop
     read_loop: LOOP
-
-        -- Buscar os valores de SKU e quantidade do cursor
-        FETCH cursor_estoque INTO v_SKU, v_quantidade;
-
-        -- Se o valor de 'pronto' for 1, significa que não há mais registros; sai do loop
-        IF pronto THEN
+        FETCH pedido_cursor INTO v_codigoPedido, v_SKU, v_quantidade, v_valor, v_frete;
+        
+        IF done THEN
             LEAVE read_loop;
         END IF;
 
-        -- Atualizar a quantidade do produto no estoque somando a quantidade recebida
-        UPDATE lmz_estoque 
-        SET quantidade = quantidade + v_quantidade 
+        -- Verificar estoque
+        SELECT quantidade INTO v_estoque 
+        FROM lm_estoque 
         WHERE SKU = v_SKU;
 
-        -- Atualizar a quantidade de produtos comprados subtraindo a quantidade recebida
-        UPDATE lmz_compras 
-        SET quantidade = quantidade - v_quantidade 
-        WHERE SKU = v_SKU;
-        
+        IF v_estoque >= v_quantidade THEN
+            -- Atualiza status do pedido para 'aprovado'
+            UPDATE lm_pedidos
+            SET status = 'aprovado'
+            WHERE codigoPedido = v_codigoPedido;
+
+            -- Atualiza o estoque
+            UPDATE lm_estoque
+            SET quantidade = quantidade - v_quantidade
+            WHERE SKU = v_SKU;
+        ELSE
+            -- Atualiza status do pedido para 'pendente'
+            UPDATE lm_pedidos
+            SET status = 'pendente'
+            WHERE codigoPedido = v_codigoPedido;
+
+            -- Verifica se é necessário adicionar à tabela de compras
+            INSERT INTO lm_compra (SKU, quantidade) 
+            VALUES (v_SKU, v_quantidade)
+            ON DUPLICATE KEY UPDATE quantidade = quantidade + v_quantidade;
+        END IF;
+
     END LOOP;
 
-    -- Remover da tabela 'lmz_compras' os registros onde a quantidade de compras for menor ou igual a zero
-    DELETE FROM lmz_compras WHERE quantidade <= 0;
+--ReabastecerEstoque
+DELIMITER //
 
-    -- Limpeza da tabela temporária de estoque (desativada, mas pode ser ativada se necessário)
-    -- TRUNCATE TABLE lmz_tempdata_estoque;
+CREATE PROCEDURE ReabastecerEstoque()
+BEGIN
+    DECLARE done INT DEFAULT FALSE;
+    DECLARE v_SKU VARCHAR(255);
+    DECLARE v_quantidade INT;
 
+    -- Declare the cursor
+    DECLARE estoque_cursor CURSOR FOR 
+        SELECT SKU, SUM(quantidade) AS total_quantidade
+        FROM wl_tempdata
+        GROUP BY SKU;
+
+    -- Declare a continue handler for when there are no more rows
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+    -- Open the cursor
+    OPEN estoque_cursor;
+
+    -- Start looping through the cursor
+    read_loop: LOOP
+        FETCH estoque_cursor INTO v_SKU, v_quantidade;
+        
+        IF done THEN
+            LEAVE read_loop;
+        END IF;
+
+        -- Verifica se o estoque está zerado
+        IF (SELECT quantidade FROM wl_estoque WHERE SKU = v_SKU) = 0 THEN
+            -- Atualiza o estoque com a nova quantidade
+            INSERT INTO wl_estoque (SKU, quantidade) 
+            VALUES (v_SKU, v_quantidade)
+            ON DUPLICATE KEY UPDATE quantidade = quantidade + v_quantidade;
+        END IF;
+
+    END LOOP;
+
+    -- Fechar o cursor
+    CLOSE estoque_cursor;
 END //
+
 DELIMITER ;
 
-Processar pedidos
-DELIMITER // 
-CREATE PROCEDURE lmz_processar_pedidos()
-BEGIN
-
-    -- Declaração de variáveis para armazenar valores temporários
-    DECLARE v_codigoPedido VARCHAR(20); 
-    DECLARE v_statusPedido VARCHAR(20);   
-    DECLARE v_codigoProduto VARCHAR(20); 
-    DECLARE v_quantidade INT;         
-    DECLARE pronto INT DEFAULT 0;      
-
-    -- Verifica se há código duplicado para o pedido e define flag
-    DECLARE Duplicado INT DEFAULT 0;
-
-    -- Declaração de cursores para selecionar pedidos e itens dos pedidos
-    DECLARE cursor_pedidos CURSOR FOR 
-        SELECT codigoPedido, status FROM lmz_pedidos;
-    DECLARE cursor_itens CURSOR FOR 
-        SELECT SKU, quantidade FROM lmz_itens_pedidos;
-
-    -- Handler para capturar quando não houver mais registros no cursor e definir 'pronto' como 1
-    DECLARE CONTINUE HANDLER FOR NOT FOUND SET pronto = 1;
-
-    -- 01. Inserção de novos clientes na tabela 'lmz_clientes', caso não estejam presentes
-    INSERT INTO lmz_clientes (codigoComprador, nomeComprador, email) 
-    SELECT DISTINCT codigoComprador, nomeComprador, email 
-    FROM lmz_tempdata 
-    WHERE codigoComprador NOT IN (SELECT codigoComprador FROM lmz_clientes) 
-    GROUP BY codigoComprador;
-
-    -- 02. Inserção de novos pedidos na tabela 'lmz_pedidos'
-    -- Caso o código do pedido já exista, será adicionado o sufixo '_novo'
-    INSERT INTO lmz_pedidos (codigoPedido, codigoComprador, dataPedido, valor, status) 
-    SELECT DISTINCT 
-        CASE 
-            WHEN EXISTS (SELECT 1 FROM lmz_pedidos WHERE codigoPedido = t.codigoPedido) THEN 
-                CONCAT(t.codigoPedido, '_novo')
-            ELSE 
-                t.codigoPedido 
-        END AS codigoPedido, 
-        t.codigoComprador, t.dataPedido, t.valor, 'pendente'
-    FROM lmz_tempdata t
-    WHERE codigoPedido NOT IN (SELECT codigoPedido FROM lmz_pedidos) 
-    GROUP BY codigoPedido;
-
-    -- 03. Inserção de novos produtos na tabela 'lmz_produtos'
-    -- O preço unitário é calculado dividindo o valor total pela quantidade de produtos
-    INSERT INTO lmz_produtos (SKU, UPC, nomeProduto, valor) 
-    SELECT DISTINCT SKU, UPC, nomeProduto, ROUND(valor / quantidade, 2) 
-    FROM lmz_tempdata 
-    WHERE SKU NOT IN (SELECT SKU FROM lmz_produtos) 
-    GROUP BY SKU;
-
-    -- 04. Inserção de itens de pedido na tabela 'lmz_itens_pedidos'
-    -- O valor unitário é calculado da mesma forma que os produtos
-    INSERT INTO lmz_itens_pedidos (codigoPedido, SKU, quantidade, valor_unitario) 
-    SELECT DISTINCT codigoPedido, SKU, quantidade, ROUND(valor / quantidade, 2) 
-    FROM lmz_tempdata 
-    WHERE NOT EXISTS (SELECT 1 FROM lmz_itens_pedidos WHERE codigoPedido = lmz_tempdata.codigoPedido AND SKU = lmz_tempdata.SKU)
-    GROUP BY codigoPedido, SKU;
-
-    -- 05. Inserção dos dados de entrega na tabela 'lmz_entregas'
-    INSERT INTO lmz_entregas (codigoPedido, endereco, CEP, UF, pais, valor) 
-    SELECT DISTINCT codigoPedido, endereco, CEP, UF, pais, frete 
-    FROM lmz_tempdata 
-    WHERE codigoPedido NOT IN (SELECT codigoPedido FROM lmz_entregas) 
-    GROUP BY codigoPedido;
-
-    -- 06. Inserção de novos SKUs na tabela de estoque, caso ainda não estejam cadastrados
-    INSERT INTO lmz_estoque (SKU) 
-    SELECT SKU 
-    FROM lmz_tempdata 
-    WHERE SKU NOT IN (SELECT SKU FROM lmz_estoque)
-    GROUP BY SKU;
-
-    -- 07. Limpeza da tabela temporária 'lmz_tempdata' após a inserção dos dados
-    TRUNCATE TABLE lmz_tempdata;
-
-    -- 08. Abrindo o cursor para percorrer os pedidos pendentes
-    OPEN cursor_pedidos;
-
-    -- Loop para processar cada pedido
-    pedidos_loop: LOOP
-
-        -- Buscar o código e o status do pedido
-        FETCH cursor_pedidos INTO v_codigoPedido, v_statusPedido;
-
-        -- Se não houver mais linhas, saia do loop
-        IF pronto THEN
-            LEAVE pedidos_loop;
-        END IF;
-
-        -- Verificar se o status do pedido é "pendente"
-        IF v_statusPedido = 'pendente' THEN
-
-            -- Abrir o cursor para processar os itens do pedido
-            OPEN cursor_itens;
-
-            itens_loop: LOOP
-
-                -- Buscar os dados dos itens do pedido (SKU e quantidade)
-                FETCH cursor_itens INTO v_codigoProduto, v_quantidade;
-
-                -- Se não houver mais linhas, saia do loop
-                IF pronto THEN
-                    LEAVE itens_loop;
-                END IF;
-
-                -- Verificar se há estoque disponível para o SKU
-                IF (SELECT quantidade FROM lmz_estoque WHERE SKU = v_codigoProduto) >= v_quantidade THEN
-
-                    -- Se houver estoque suficiente, aprovar o item do pedido
-                    UPDATE lmz_itens_pedidos 
-                    SET status = 'aprovado' 
-                    WHERE codigoPedido = v_codigoPedido AND SKU = v_codigoProduto;
-
-                    -- Atualizar a quantidade disponível no estoque
-                    UPDATE lmz_estoque 
-                    SET quantidade = quantidade - v_quantidade 
-                    WHERE SKU = v_codigoProduto;
-
-                ELSE
-                    -- Se não houver estoque suficiente, o pedido permanece pendente
-                    UPDATE lmz_pedidos 
-                    SET status = 'pendente' 
-                    WHERE codigoPedido = v_codigoPedido;
-
-                    -- Atualizar o status do item do pedido para "pendente"
-                    UPDATE lmz_itens_pedidos 
-                    SET status = 'pendente' 
-                    WHERE codigoPedido = v_codigoPedido AND SKU = v_codigoProduto;
-
-                    -- Se o produto já estiver na lista de compras, atualizar a quantidade
-                    IF EXISTS (SELECT 1 FROM lmz_compras WHERE SKU = v_codigoProduto) THEN
-                        UPDATE lmz_compras 
-                        SET quantidade = quantidade + v_quantidade 
-                        WHERE SKU = v_codigoProduto;
-                    ELSE
-                        -- Caso contrário, inserir o produto na lista de compras
-                        INSERT INTO lmz_compras (SKU, quantidade) 
-                        VALUES (v_codigoProduto, v_quantidade - (SELECT quantidade FROM lmz_estoque WHERE SKU = v_codigoProduto));
-                    END IF;
-
-                END IF;
-
-            END LOOP;
-
-            -- Fechar o cursor de itens após o processamento
-            CLOSE cursor_itens;
-
-            -- Se todos os itens do pedido estiverem aprovados, aprovar o pedido
-            IF NOT EXISTS (SELECT 1 FROM lmz_itens_pedidos WHERE codigoPedido = v_codigoPedido AND status = 'pendente') THEN
-                UPDATE lmz_pedidos 
-                SET status = 'aprovado' 
-                WHERE codigoPedido = v_codigoPedido;
-            END IF;
-
-        END IF;
-
-    END LOOP;
-
-    DECLARE cursor_pedidos CURSOR FOR SELECT codigoPedido, status  FROM wl_pedidos  ORDER BY valor DESC;
-
-    -- Fechar o cursor de pedidos após o processamento
-    CLOSE cursor_pedidos;
-
+    -- Fechar o cursor
+    CLOSE pedido_cursor;
 END //
+
 DELIMITER ;
